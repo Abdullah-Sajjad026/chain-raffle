@@ -22,6 +22,11 @@ import "@chainlink/contracts/src/v0.8/interfaces/KeeperCompatibleInterface.sol";
 error Raffle__LowEntranceFee();
 error Raffle__NotOpen();
 error Raffle_TransferFailed();
+error Raffle__UpKeepNotNeeded(
+    uint256 currentBalance,
+    uint256 playersCount,
+    uint256 raffleState
+);
 
 /**
  * @title Raffle
@@ -29,7 +34,7 @@ error Raffle_TransferFailed();
  * @notice A decentralized raffle contract where users can enter by sending a certain amount of ether
  * @dev This contract uses Chainlink VRF to generate a random number and Chainlink Keepers to automate the process of picking a winner
  */
-contract Raffle is VRFConsumerBaseV2 {
+contract Raffle is VRFConsumerBaseV2, KeeperCompatibleInterface {
     // Types
     enum RaffleState {
         OPEN,
@@ -101,7 +106,42 @@ contract Raffle is VRFConsumerBaseV2 {
         emit RaffleEntered(msg.sender, block.timestamp);
     }
 
-    function pickWinner() public {
+    function checkUpkeep(
+        bytes memory /* checkData */
+    )
+        public
+        view
+        override
+        returns (bool upKeepNeeded, bytes memory /* performData */)
+    {
+        bool isIntervalPassed = block.timestamp - lastTimeStamp > i_interval;
+        bool isPlayersCountAboveZero = s_players.length > 0;
+        bool isRaffleOpen = raffleState == RaffleState.OPEN;
+        bool hasBalance = address(this).balance > 0;
+
+        upKeepNeeded =
+            isIntervalPassed &&
+            isPlayersCountAboveZero &&
+            isRaffleOpen &&
+            hasBalance;
+    }
+
+    /**
+     * @notice An overridden Chainlink KeeperCompatibleInterface function that is called when the upkeep is needed
+     * @dev This function is called by Chainlink Keepers when the upkeep is needed
+     *
+     */
+    function performUpkeep(bytes calldata /* checkData */) external override {
+        (bool upKeepNeeded, ) = checkUpkeep("");
+
+        if (!upKeepNeeded) {
+            revert Raffle__UpKeepNotNeeded(
+                address(this).balance,
+                s_players.length,
+                uint256(raffleState)
+            );
+        }
+
         raffleState = RaffleState.CALCULATING;
 
         // request randomness from chainlink
